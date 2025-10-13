@@ -1,0 +1,9 @@
+<component name="libraryTable">
+  <library name="Session_Template">
+    <CLASSES>
+      <root url="jar://$PROJECT_DIR$/Template-Files/Session_Template.zip!/" />
+    </CLASSES>
+    <JAVADOC />
+    <SOURCES />
+  </library>
+</component>

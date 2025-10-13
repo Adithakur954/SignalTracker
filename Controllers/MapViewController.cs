@@ -1,28 +1,18 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using SignalTracker.Models; // Your DbContext model
+﻿using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
 using System.Linq;
-using System.Threading.Tasks;
-using SignalTracker.Helper;
-using static Microsoft.EntityFrameworkCore.DbLoggerCategory;
 using System.Text.Json.Serialization;
-using MySqlConnector;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.AspNetCore.HttpOverrides;
-using Humanizer;
-using System.Linq;
-using System;
-using Newtonsoft.Json;
-
-using System.Drawing;
-using NetTopologySuite;
-using NetTopologySuite.Geometries;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.Extensions.Hosting;
-using Microsoft.AspNetCore.Http;
 using System.Threading.Tasks;
-using System.Linq;
-
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Newtonsoft.Json;
+using SignalTracker.Helper;
+using SignalTracker.Models;
 
 namespace SignalTracker.Controllers
 {
@@ -31,17 +21,15 @@ namespace SignalTracker.Controllers
     public class MapViewController : BaseController
     {
         private readonly IWebHostEnvironment _env;
+        private readonly ApplicationDbContext db;
+        private readonly CommonFunction cf;
 
-        ApplicationDbContext db = null;
-        CommonFunction cf = null;
         public MapViewController(ApplicationDbContext context, IHttpContextAccessor httpContextAccessor, IWebHostEnvironment env)
         {
             db = context;
             _env = env;
             cf = new CommonFunction(context, httpContextAccessor);
         }
-
-
 
         public class UserModel
         {
@@ -51,63 +39,72 @@ namespace SignalTracker.Controllers
             public string model { get; set; }
             public string os { get; set; }
             public string operator_name { get; set; }
-
             public string? device_id { get; set; }
-
             public string? gcm_id { get; set; }
-
             public int? company_id { get; set; }
         }
 
         [HttpPost]
         [AllowAnonymous]
-        public JsonResult user_signup([FromBody] UserModel model)
+        public async Task<JsonResult> user_signup([FromBody] UserModel model)
         {
-            ReturnAPIResponse message = new ReturnAPIResponse();
+            var message = new ReturnAPIResponse();
 
             try
             {
-                //var existingUser = db.tbl_user.FirstOrDefault(u => u.mobile == model.mobile);
-                if (model != null && model.device_id != null)
+                if (model == null)
                 {
-                    var existingUser1 = db.tbl_user.FirstOrDefault(u => u.device_id == model.device_id);
-                    if (existingUser1 != null)
+                    message.Status = 0;
+                    message.Message = "Invalid request.";
+                    return Json(message);
+                }
+
+                if (!string.IsNullOrEmpty(model.device_id))
+                {
+                    var existingByDevice = await db.tbl_user
+                        .AsNoTracking()
+                        .FirstOrDefaultAsync(u => u.device_id == model.device_id);
+
+                    if (existingByDevice != null)
                     {
                         message.Status = 1;
-                        message.Message = "This device is already registered as - " + existingUser1.name;
-                        message.Data = new { userid = existingUser1.id }; // Replace 'id' with your PK column
+                        message.Message = "This device is already registered as - " + existingByDevice.name;
+                        message.Data = new { userid = existingByDevice.id };
+                        return Json(message); // early return to avoid duplicate creation
                     }
                 }
-                var existingUser = db.tbl_user.FirstOrDefault(u => u.mobile == model.mobile && u.make == model.make);
+
+                var existingUser = await db.tbl_user
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(u => u.mobile == model.mobile && u.make == model.make);
 
                 if (existingUser != null)
                 {
                     message.Status = 1;
                     message.Message = "User already exists.";
-                    message.Data = new { userid = existingUser.id }; // Replace 'id' with your PK column
+                    message.Data = new { userid = existingUser.id };
+                    return Json(message);
                 }
-                else
+
+                var newUser = new tbl_user
                 {
-                    var newUser = new tbl_user
-                    {
-                        name = model.name,
-                        mobile = model.mobile,
-                        make = model.make,
-                        model = model.model,
-                        os = model.os,
-                        operator_name = model.operator_name,
-                        device_id = model.device_id,
-                        gcm_id = model.gcm_id,
-                        company_id = model.company_id
-                    };
+                    name = model.name,
+                    mobile = model.mobile,
+                    make = model.make,
+                    model = model.model,
+                    os = model.os,
+                    operator_name = model.operator_name,
+                    device_id = model.device_id,
+                    gcm_id = model.gcm_id,
+                    company_id = model.company_id
+                };
 
-                    db.tbl_user.Add(newUser);
-                    db.SaveChanges();
+                db.tbl_user.Add(newUser);
+                await db.SaveChangesAsync();
 
-                    message.Status = 1;
-                    message.Message = "User saved successfully.";
-                    message.Data = new { userid = newUser.id }; // Replace 'id' with your PK column
-                }
+                message.Status = 1;
+                message.Message = "User saved successfully.";
+                message.Data = new { userid = newUser.id };
             }
             catch (Exception ex)
             {
@@ -128,29 +125,27 @@ namespace SignalTracker.Controllers
 
         [HttpPost]
         [AllowAnonymous]
-        public JsonResult start_session([FromBody] SessionStartModel model)
+        public async Task<JsonResult> start_session([FromBody] SessionStartModel model)
         {
-            ReturnAPIResponse message = new ReturnAPIResponse();
+            var message = new ReturnAPIResponse();
 
             try
             {
+                var ci = CultureInfo.InvariantCulture;
                 var newSess = new tbl_session
                 {
                     user_id = model.userid,
-                    start_time = DateTime.TryParse(model.start_time, out var ts) ? ts : (DateTime?)null,
-
+                    start_time = DateTime.TryParse(model.start_time, ci, DateTimeStyles.RoundtripKind, out var ts) ? ts : (DateTime?)null,
                     type = model.type,
                     notes = model.notes
-
                 };
 
                 db.tbl_session.Add(newSess);
-                db.SaveChanges();
+                await db.SaveChangesAsync();
 
                 message.Status = 1;
                 message.Message = "Session Started.";
-                message.Data = new { sessionid = newSess.id }; // Replace 'id' with your PK column
-
+                message.Data = new { sessionid = newSess.id };
             }
             catch (Exception ex)
             {
@@ -167,41 +162,45 @@ namespace SignalTracker.Controllers
             public string end_time { get; set; }
             public string start_lat { get; set; }
             public string start_lon { get; set; }
-
             public string end_lat { get; set; }
             public string end_lon { get; set; }
             public float distance { get; set; }
             public int capture_frequency { get; set; }
-
             public string? start_address { get; set; }
             public string? end_address { get; set; }
         }
 
         [HttpPost]
         [AllowAnonymous]
-        public JsonResult end_session([FromBody] SessionEndModel model)
+        public async Task<JsonResult> end_session([FromBody] SessionEndModel model)
         {
-            ReturnAPIResponse message = new ReturnAPIResponse();
+            var message = new ReturnAPIResponse();
 
             try
             {
-                var existingSession = db.tbl_session.FirstOrDefault(u => u.id == model.sessionid);
+                var existingSession = await db.tbl_session.FirstOrDefaultAsync(u => u.id == model.sessionid);
 
-                if (existingSession != null)
+                if (existingSession == null)
                 {
-                    existingSession.start_lat = float.TryParse(model.start_lat, out var latVal) ? latVal : (float?)null;
-                    existingSession.start_lon = float.TryParse(model.start_lon, out var lonVal) ? lonVal : (float?)null;
-                    existingSession.end_lat = float.TryParse(model.end_lat, out var latVal1) ? latVal1 : (float?)null;
-                    existingSession.end_lon = float.TryParse(model.end_lon, out var lonVal1) ? latVal1 : (float?)null;
-                    existingSession.end_time = DateTime.TryParse(model.end_time, out var ts) ? ts : (DateTime?)null;
-                    existingSession.start_address = model.start_address;
-                    existingSession.end_address = model.end_address;
-                    existingSession.capture_frequency = model.capture_frequency;
-                    existingSession.distance = model.distance;
-
-
-                    db.SaveChanges();
+                    message.Status = 0;
+                    message.Message = "Session not found.";
+                    return Json(message);
                 }
+
+                var ci = CultureInfo.InvariantCulture;
+
+                existingSession.start_lat = float.TryParse(model.start_lat, NumberStyles.Float, ci, out var latVal) ? latVal : (float?)null;
+                existingSession.start_lon = float.TryParse(model.start_lon, NumberStyles.Float, ci, out var lonVal) ? lonVal : (float?)null;
+                existingSession.end_lat   = float.TryParse(model.end_lat,   NumberStyles.Float, ci, out var latVal1) ? latVal1 : (float?)null;
+                existingSession.end_lon   = float.TryParse(model.end_lon,   NumberStyles.Float, ci, out var lonVal1) ? lonVal1 : (float?)null; // fixed
+                existingSession.end_time  = DateTime.TryParse(model.end_time, ci, DateTimeStyles.RoundtripKind, out var ts) ? ts : (DateTime?)null;
+
+                existingSession.start_address = model.start_address;
+                existingSession.end_address = model.end_address;
+                existingSession.capture_frequency = model.capture_frequency;
+                existingSession.distance = model.distance;
+
+                await db.SaveChangesAsync();
 
                 message.Status = 1;
                 message.Message = "Session Ended.";
@@ -220,11 +219,12 @@ namespace SignalTracker.Controllers
         public JsonResult GetProjectPolygons(int projectId)
         {
             var polygons = db.Set<PolygonDto>()
-             .FromSqlRaw(@"
-                SELECT id, name, ST_AsText(region) as wkt 
-                FROM map_regions 
-                WHERE status = 1 and tbl_project_id = {0}", projectId)
-             .ToList();
+                .FromSqlRaw(@"
+                    SELECT id, name, ST_AsText(region) as wkt 
+                    FROM map_regions 
+                    WHERE status = 1 and tbl_project_id = {0}", projectId)
+                .AsNoTracking()
+                .ToList();
 
             var result = polygons.Select(p => new
             {
@@ -233,15 +233,8 @@ namespace SignalTracker.Controllers
                 p.wkt
             });
 
-            /*var result = polygons.Select(p => new {
-                p.id,
-                p.name,
-                coordinates = ParsePolygonWKT(p.wkt)
-            });*/
-
             return Json(result);
         }
-
 
         public class NetworkLogFilters
         {
@@ -260,7 +253,6 @@ namespace SignalTracker.Controllers
             public bool loadFilters { get; set; } = false;
         }
 
-
         public class MapFilter
         {
             public int session_id { get; set; }
@@ -271,14 +263,10 @@ namespace SignalTracker.Controllers
             public int limit { get; set; } = 1000;
         }
 
-
         [HttpGet]
-        [Route("GetNetworkLog")] // Explicitly define the route for clarity
+        [Route("GetNetworkLog")]
         public async Task<JsonResult> GetNetworkLog([FromQuery] MapFilter filters)
         {
-            // The session_id check can be removed if you want to allow fetching
-            // logs for multiple sessions based on other criteria in the future.
-            // For now, it's good validation.
             if (filters.session_id <= 0)
             {
                 return Json(new List<object>());
@@ -286,10 +274,11 @@ namespace SignalTracker.Controllers
 
             try
             {
-                IQueryable<tbl_network_log> query = db.tbl_network_log
-                                                      .Where(log => log.session_id == filters.session_id);
+                var limit = Math.Min(Math.Max(filters.limit, 1), 10000); // cap
 
-                // Conditionally apply filters
+                IQueryable<tbl_network_log> query = db.tbl_network_log.AsNoTracking()
+                    .Where(log => log.session_id == filters.session_id);
+
                 if (!string.IsNullOrEmpty(filters.NetworkType) && filters.NetworkType.ToUpper() != "ALL")
                 {
                     query = query.Where(log => log.network == filters.NetworkType);
@@ -304,17 +293,15 @@ namespace SignalTracker.Controllers
                     query = query.Where(log => log.timestamp < endDate);
                 }
 
-                // ✅ FIX: Order the data BEFORE applying pagination (Skip/Take)
                 var paginatedQuery = query
-                    .OrderBy(log => log.timestamp) // Order first
-                    .Skip((filters.page - 1) * filters.limit) // Then skip
-                    .Take(filters.limit); // Then take
+                    .OrderBy(log => log.timestamp)
+                    .Skip((filters.page - 1) * limit)
+                    .Take(limit);
 
-                // ✅ FIX: The second OrderBy has been REMOVED from here.
                 var logs = await paginatedQuery
                     .Select(log => new
                     {
-                        log.session_id, // It's helpful to return the session_id
+                        log.session_id,
                         log.lat,
                         log.lon,
                         log.rsrp,
@@ -325,9 +312,11 @@ namespace SignalTracker.Controllers
                         log.timestamp,
                         log.dl_tpt,
                         log.ul_tpt,
-                        log.m_alpha_long, // include provider in response
+                        m_alpha_long = log.m_alpha_long,   // keep original
+                        provider = log.m_alpha_long,       // alias for convenience
                         log.mos,
-                        log.volte_call
+                        log.volte_call,
+                        log.image_path
                     })
                     .ToListAsync();
 
@@ -335,33 +324,26 @@ namespace SignalTracker.Controllers
             }
             catch (Exception ex)
             {
-                // For debugging, it's useful to see the error on the server
                 Console.WriteLine($"Error in GetNetworkLog: {ex.Message}");
-                // Return a proper 500 status code with a message
                 return new JsonResult(new { message = "An error occurred on the server." }) { StatusCode = 500 };
             }
         }
 
-
         [HttpGet]
         [Route("GetPredictionLog")]
-        public JsonResult GetPredictionLog(int? projectId, string token, DateTime? fromDate, DateTime? toDate,
-                                   string providers, string technology, string metric,
-                                   bool isBestTechnology, string Band, string EARFCN, string State, int pointsInsideBuilding = 0, bool loadFilters = false)
+        public JsonResult GetPredictionLog(
+            int? projectId, string token, DateTime? fromDate, DateTime? toDate,
+            string providers, string technology, string metric,
+            bool isBestTechnology, string Band, string EARFCN, string State,
+            int pointsInsideBuilding = 0, bool loadFilters = false)
         {
-            ReturnAPIResponse message = new ReturnAPIResponse();
+            var message = new ReturnAPIResponse();
 
             try
             {
                 cf.SessionCheck();
-                // Token validation can be re-enabled if needed
-                // message = cf.MatchToken(token);
-                // if (message.Status == 1)
 
-                IQueryable<tbl_prediction_data> query = db.tbl_prediction_data;
-
-                message.Status = 1;
-                string sessionIds = "";
+                IQueryable<tbl_prediction_data> query = db.tbl_prediction_data.AsNoTracking();
 
                 if (projectId.HasValue && projectId != 0)
                 {
@@ -374,66 +356,18 @@ namespace SignalTracker.Controllers
                 if (!string.IsNullOrEmpty(EARFCN))
                     query = query.Where(e => e.earfcn == EARFCN);
 
-                if (!string.IsNullOrEmpty(State))
-                {
-                    //if (State == "Data") query = query.Where(e => e.apps != null && e.apps != "" && e.call_state == "Idle");
-                    //if (State == "Idle") query = query.Where(e => (e.apps == null || e.apps == "") && e.call_state == "Idle");
-                    //if (State == "DataVoice") query = query.Where(e => e.apps != null && e.apps != "" && e.call_state == "Off the hook");
-                    //if (State == "Voice") query = query.Where(e => (e.apps == null || e.apps == "") && e.call_state == "Off the hook");
-                }
+                // Optional: filter by date/provider/tech if needed here...
 
-                var data = query.Select(a => new
-                {
-                    a.lat,
-                    a.lon,
-                    prm = metric == "RSRP" ? a.rsrp : (metric == "RSRQ" ? a.rsrq : a.sinr)
-                }).ToList();
+                // Normalize metric key
+                var metricKey = (metric ?? "RSRP").ToUpperInvariant();
 
-                // Calculate averages
-                double? averageRsrp = query.Where(x => x.rsrp != null).Average(x => (double?)x.rsrp);
-                double? averageRsrq = query.Where(x => x.rsrq != null).Average(x => (double?)x.rsrq);
-                double? averageSinr = query.Where(x => x.sinr != null).Average(x => (double?)x.sinr);
+                // Prepare data source
+                List<(double? lat, double? lon, double? rsrp, double? rsrq, double? sinr)> dataSrc;
 
-                GraphStruct CoveragePerfGraph = new GraphStruct();
-                var setting = db.thresholds.FirstOrDefault(x => x.user_id == cf.UserId);
-                if (setting == null)
+                if (pointsInsideBuilding == 1 && projectId.HasValue)
                 {
-                    setting = db.thresholds.FirstOrDefault(x => x.is_default == 1);
-                }
-                List<SettingReangeColor>? settingObj = null;
-                if (setting != null && data.Count() > 0)
-                {
-                    if (metric == "RSRP")
-                        settingObj = JsonConvert.DeserializeObject<List<SettingReangeColor>>(setting.rsrp_json);
-                    else if (metric == "RSRQ")
-                        settingObj = JsonConvert.DeserializeObject<List<SettingReangeColor>>(setting.rsrq_json);
-                    else if (metric == "SNR")
-                        settingObj = JsonConvert.DeserializeObject<List<SettingReangeColor>>(setting.sinr_json);
-
-                    if (settingObj != null && settingObj.Count > 0)
-                    {
-                        int totalCount = data.Count();
-                        GrapSeries seriesObj = new GrapSeries();
-                        foreach (var s in settingObj)
-                        {
-                            CoveragePerfGraph.Category.Add(s.range);
-                            int matchedCount = data.Count(a => a.prm >= s.min && a.prm <= s.max);
-                            float per = totalCount > 0 ? (matchedCount * 100f / totalCount) : 0f;
-                            seriesObj.data.Add(new { y = Math.Round(per, 2), color = s.color });
-                        }
-                        CoveragePerfGraph.series.Add(seriesObj);
-                    }
-                }
-                //pointsinsidebuilding = 1;
-                // --- Add spatial filtering condition here ---
-                if (pointsInsideBuilding == 1)
-                {
-                    try
-                    {
-                        // The raw SQL query with a parameterized project_id
-                        // IMPORTANT: Make sure column names here EXACTLY match properties in PredictionPointDto.
-                        // If they don't, use SQL aliases (e.g., tpd.tbl_project_id AS MyProjectId).
-                        string sqlQuery = @"
+                    // Raw SQL spatial containment
+                    string sqlQuery = @"
                         SELECT
                             tpd.tbl_project_id,
                             tpd.lat,
@@ -448,51 +382,72 @@ namespace SignalTracker.Controllers
                         JOIN
                             map_regions AS mr ON tpd.tbl_project_id = mr.tbl_project_id
                         WHERE
-                            tpd.tbl_project_id = {0} AND -- Parameter for project ID
-                        ST_Contains(mr.region, ST_PointFromText(CONCAT('POINT(', tpd.lon, ' ', tpd.lat, ')'), 4326));";
+                            tpd.tbl_project_id = {0}
+                            AND ST_Contains(mr.region, ST_PointFromText(CONCAT('POINT(', tpd.lon, ' ', tpd.lat, ')'), 4326));";
 
-                        // Execute the raw SQL query and map results to PredictionPointDto
-                        var matchingPoints = db.Set<PredictionPointDto>() // Use Set<T>() for types not directly in DbSets
-                                                           .FromSqlRaw(sqlQuery, projectId) // Pass the projectId as a parameter
-                                                           .ToList();
-                        var data1 = matchingPoints.Select(a => new
-                        {
-                            a.lat,
-                            a.lon,
-                            prm = metric == "RSRP" ? a.rsrp : (metric == "RSRQ" ? a.rsrq : a.sinr)
-                        }).ToList();
+                    var matchingPoints = db.Set<PredictionPointDto>()
+                        .FromSqlRaw(sqlQuery, projectId.Value)
+                        .AsNoTracking()
+                        .ToList();
 
-                        double? averageRsrp1 = matchingPoints.Where(x => x.rsrp != null).Average(x => (double?)x.rsrp);
-                        double? averageRsrq1 = matchingPoints.Where(x => x.rsrq != null).Average(x => (double?)x.rsrq);
-                        double? averageSinr1 = matchingPoints.Where(x => x.sinr != null).Average(x => (double?)x.sinr);
+                    dataSrc = matchingPoints
+                        .Select(a => ((double?)a.lat, (double?)a.lon, (double?)a.rsrp, (double?)a.rsrq, (double?)a.sinr))
+                        .ToList();
+                }
+                else
+                {
+                    var baseRows = query.Select(a => new { a.lat, a.lon, a.rsrp, a.rsrq, a.sinr }).ToList();
+                    dataSrc = baseRows
+                        .Select(a => ((double?)a.lat, (double?)a.lon, (double?)a.rsrp, (double?)a.rsrq, (double?)a.sinr))
+                        .ToList();
+                }
 
-                        message.Data = new
-                        {
-                            dataList = data1,
-                            avgRsrp = averageRsrp1,
-                            avgRsrq = averageRsrq1,
-                            avgSinr = averageSinr1,
-                            colorSetting = settingObj,
-                            coveragePerfGraph = CoveragePerfGraph,
-                        };
+                var dataList = dataSrc.Select(a => new
+                {
+                    lat = a.lat,
+                    lon = a.lon,
+                    prm = metricKey == "RSRP" ? a.rsrp : (metricKey == "RSRQ" ? a.rsrq : a.sinr)
+                }).ToList();
 
-                        return Json(message);
-                    }
-                    catch (Exception ex)
+                // Averages from the same dataset
+                double? averageRsrp = dataSrc.Where(x => x.rsrp.HasValue).Average(x => (double?)x.rsrp.Value);
+                double? averageRsrq = dataSrc.Where(x => x.rsrq.HasValue).Average(x => (double?)x.rsrq.Value);
+                double? averageSinr = dataSrc.Where(x => x.sinr.HasValue).Average(x => (double?)x.sinr.Value);
+
+                // Threshold/color settings for graph
+                GraphStruct CoveragePerfGraph = new GraphStruct();
+                var setting = db.thresholds.AsNoTracking().FirstOrDefault(x => x.user_id == cf.UserId) 
+                              ?? db.thresholds.AsNoTracking().FirstOrDefault(x => x.is_default == 1);
+
+                List<SettingReangeColor>? settingObj = null;
+                if (setting != null && dataList.Count > 0)
+                {
+                    if (metricKey == "RSRP")
+                        settingObj = JsonConvert.DeserializeObject<List<SettingReangeColor>>(setting.rsrp_json);
+                    else if (metricKey == "RSRQ")
+                        settingObj = JsonConvert.DeserializeObject<List<SettingReangeColor>>(setting.rsrq_json);
+                    else if (metricKey == "SINR") // corrected from "SNR"
+                        settingObj = JsonConvert.DeserializeObject<List<SettingReangeColor>>(setting.sinr_json);
+
+                    if (settingObj != null && settingObj.Count > 0)
                     {
-                        // Log the error (e.g., using ILogger from Microsoft.Extensions.Logging)
-                        Console.WriteLine($"Error fetching prediction data with raw SQL: {ex.Message}");
-                        // In a production environment, avoid exposing raw error details to the client
-                        return Json(new { error = "An error occurred while fetching data.", details = ex.Message });
+                        int totalCount = dataList.Count;
+                        GrapSeries seriesObj = new GrapSeries();
+                        foreach (var s in settingObj)
+                        {
+                            CoveragePerfGraph.Category.Add(s.range);
+                            int matchedCount = dataList.Count(a => a.prm >= s.min && a.prm <= s.max);
+                            float per = totalCount > 0 ? (matchedCount * 100f / totalCount) : 0f;
+                            seriesObj.data.Add(new { y = Math.Round(per, 2), color = s.color });
+                        }
+                        CoveragePerfGraph.series.Add(seriesObj);
                     }
                 }
 
-
-
-
+                message.Status = 1;
                 message.Data = new
                 {
-                    dataList = data,
+                    dataList,
                     avgRsrp = averageRsrp,
                     avgRsrq = averageRsrq,
                     avgSinr = averageSinr,
@@ -509,51 +464,49 @@ namespace SignalTracker.Controllers
             return Json(message);
         }
 
-
-        [HttpGet] // Changed endpoint name to avoid conflict if you keep the other
+        [HttpGet]
+        [Route("GetPredictionDataForSelectedBuildingPolygonsRaw")]
         public JsonResult GetPredictionDataForSelectedBuildingPolygonsRaw(int projectId, string metric)
         {
             try
             {
-                // The raw SQL query with a parameterized project_id
-                // IMPORTANT: Make sure column names here EXACTLY match properties in PredictionPointDto.
-                // If they don't, use SQL aliases (e.g., tpd.tbl_project_id AS MyProjectId).
                 string sqlQuery = @"
-                SELECT
-                    tpd.tbl_project_id,
-                    tpd.lat,
-                    tpd.lon,
-                    tpd.rsrp,
-                    tpd.rsrq,
-                    tpd.sinr,
-                    tpd.band,
-                    tpd.earfcn
-                FROM
-                    tbl_prediction_data AS tpd
-                JOIN
-                    map_regions AS mr ON tpd.tbl_project_id = mr.tbl_project_id
-                WHERE
-                    tpd.tbl_project_id = {0} AND -- Parameter for project ID
-                    ST_Contains(mr.region, ST_PointFromText(CONCAT('POINT(', tpd.lon, ' ', tpd.lat, ')'), 4326));";
+                    SELECT
+                        tpd.tbl_project_id,
+                        tpd.lat,
+                        tpd.lon,
+                        tpd.rsrp,
+                        tpd.rsrq,
+                        tpd.sinr,
+                        tpd.band,
+                        tpd.earfcn
+                    FROM
+                        tbl_prediction_data AS tpd
+                    JOIN
+                        map_regions AS mr ON tpd.tbl_project_id = mr.tbl_project_id
+                    WHERE
+                        tpd.tbl_project_id = {0}
+                        AND ST_Contains(mr.region, ST_PointFromText(CONCAT('POINT(', tpd.lon, ' ', tpd.lat, ')'), 4326));";
 
-                // Execute the raw SQL query and map results to PredictionPointDto
-                var matchingPoints = db.Set<PredictionPointDto>() // Use Set<T>() for types not directly in DbSets
-                                                   .FromSqlRaw(sqlQuery, projectId) // Pass the projectId as a parameter
-                                                   .ToList();
+                var matchingPoints = db.Set<PredictionPointDto>()
+                    .FromSqlRaw(sqlQuery, projectId)
+                    .AsNoTracking()
+                    .ToList();
+
+                var metricKey = (metric ?? "RSRP").ToUpperInvariant();
+
                 var data = matchingPoints.Select(a => new
                 {
                     a.lat,
                     a.lon,
-                    Prm = metric == "RSRP" ? a.rsrp : (metric == "RSRQ" ? a.rsrq : a.sinr)
+                    Prm = metricKey == "RSRP" ? a.rsrp : (metricKey == "RSRQ" ? a.rsrq : a.sinr)
                 }).ToList();
 
                 return Json(data);
             }
             catch (Exception ex)
             {
-                // Log the error (e.g., using ILogger from Microsoft.Extensions.Logging)
                 Console.WriteLine($"Error fetching prediction data with raw SQL: {ex.Message}");
-                // In a production environment, avoid exposing raw error details to the client
                 return Json(new { error = "An error occurred while fetching data.", details = ex.Message });
             }
         }
@@ -562,31 +515,25 @@ namespace SignalTracker.Controllers
         [Route("GetProjects")]
         public JsonResult GetProjects()
         {
-            ReturnAPIResponse message = new ReturnAPIResponse();
+            var message = new ReturnAPIResponse();
             try
             {
                 cf.SessionCheck();
-                //message = cf.MatchToken(token);
-                //if (message.Status == 1)
+
+                message.Status = 1;
+                message.Data = db.tbl_project.AsNoTracking().Select(a => new
                 {
-
-                    message.Status = 1;
-
-                    message.Data = db.tbl_project.Select(a => new
-                    {
-                        a.id,
-                        a.project_name,
-                        a.from_date,
-                        a.to_date,
-                        a.provider,
-                        a.tech,
-                        a.band,
-                        a.earfcn,
-                        a.apps,
-                        a.created_on
-
-                    }).ToList();
-                }
+                    a.id,
+                    a.project_name,
+                    a.from_date,
+                    a.to_date,
+                    a.provider,
+                    a.tech,
+                    a.band,
+                    a.earfcn,
+                    a.apps,
+                    a.created_on
+                }).ToList();
             }
             catch (Exception ex)
             {
@@ -597,7 +544,6 @@ namespace SignalTracker.Controllers
 
         [HttpPost]
         [AllowAnonymous]
-        //[Route("upload_image")]
         public async Task<IActionResult> UploadImage([FromForm] IFormFile file)
         {
             if (file == null || file.Length == 0)
@@ -605,88 +551,71 @@ namespace SignalTracker.Controllers
                 return BadRequest("No file uploaded.");
             }
 
-            // Optional: restrict to images only
-            var allowedTypes = new[] { "image/jpeg", "image/png", "image/gif" };
-            if (!allowedTypes.Contains(file.ContentType))
+            var allowedExts = new[] { ".jpg", ".jpeg", ".png", ".gif" };
+            var ext = Path.GetExtension(file.FileName);
+            if (string.IsNullOrWhiteSpace(ext) || !allowedExts.Contains(ext.ToLowerInvariant()))
             {
                 return BadRequest("Only image files are allowed.");
             }
 
-            // Get path to wwwroot
-            //var webRootPath = _env.WebRootPath; // Inject IWebHostEnvironment _env via constructor
             var webRootPath = _env.WebRootPath ?? Path.Combine(Directory.GetCurrentDirectory(), "wwwroot");
-
             var uploadFolder = Path.Combine(webRootPath, "uploaded_images");
 
-            // Define upload path
-            //var uploadPath = Path.Combine(Directory.GetCurrentDirectory(), "uploaded_images");
-
-            // Create directory if not exists
             if (!Directory.Exists(uploadFolder))
                 Directory.CreateDirectory(uploadFolder);
 
-            // Use original filename
-            var filePath = Path.Combine(uploadFolder, Path.GetFileName(file.FileName));
+            var fileName = $"{Guid.NewGuid():N}{ext}";
+            var filePath = Path.Combine(uploadFolder, fileName);
 
-            // Save file
-            using (var stream = new FileStream(filePath, FileMode.Create))
+            await using (var stream = new FileStream(filePath, FileMode.Create))
             {
                 await file.CopyToAsync(stream);
             }
 
-            return Ok(new { message = "Image uploaded successfully.", filename = file.FileName });
+            var publicUrl = $"/uploaded_images/{fileName}";
+            return Ok(new { message = "Image uploaded successfully.", filename = fileName, url = publicUrl });
         }
-
 
         public class LogFilterModel
         {
             public DateTime? StartDate { get; set; }
             public DateTime? EndDate { get; set; }
-            // New optional provider filter (matches m_alpha_long in tbl_network_log)
             public string? Provider { get; set; }
-            // You can add more filters here later (e.g., NetworkType, Provider)
-
-           public int? PolygonId { get; set; }
+            public int? PolygonId { get; set; }
         }
 
         [HttpGet]
-        [Route("GetLogsByDateRange")] // A new, dedicated route
+        [Route("GetLogsByDateRange")]
         public async Task<JsonResult> GetLogsByDateRange([FromQuery] LogFilterModel filters)
         {
             try
             {
-                // Start with the base query for all network logs
-                IQueryable<tbl_network_log> query = db.tbl_network_log;
+                IQueryable<tbl_network_log> query = db.tbl_network_log.AsNoTracking();
 
-                // Apply StartDate filter if provided
                 if (filters.StartDate.HasValue)
                 {
                     query = query.Where(log => log.timestamp >= filters.StartDate.Value);
                 }
 
-                // Apply EndDate filter if provided
                 if (filters.EndDate.HasValue)
                 {
-                    // Add 1 day to the end date to include all logs on that day
                     var endDate = filters.EndDate.Value.AddDays(1);
                     query = query.Where(log => log.timestamp < endDate);
                 }
 
-                // Apply Provider filter if provided (matches m_alpha_long column)
                 if (!string.IsNullOrEmpty(filters.Provider))
                 {
                     query = query.Where(log => log.m_alpha_long == filters.Provider);
                 }
 
-                 if (filters.PolygonId.HasValue) // NEW
-        query = query.Where(log => log.polygon_id == filters.PolygonId.Value);
+                if (filters.PolygonId.HasValue)
+                {
+                    query = query.Where(log => log.polygon_id == filters.PolygonId.Value);
+                }
 
-                // IMPORTANT: To prevent crashing the server and browser,
-                // limit the number of points returned in a single request.
-                // 20,000 is a reasonable limit. You can adjust this.
                 var logs = await query
-                    .OrderBy(log => log.timestamp) // Ordering is good practice
-                    .Take(20000) // Apply the limit
+                    .OrderBy(log => log.timestamp)
+                    .Take(20000)
                     .Select(log => new
                     {
                         log.session_id,
@@ -701,14 +630,17 @@ namespace SignalTracker.Controllers
                         provider = log.m_alpha_long,
                         log.dl_tpt,
                         log.ul_tpt,
-                        log.mos, // include provider in response
-                        log.polygon_id 
+                        log.mos,
+                        log.polygon_id,
+                        log.image_path
                     })
                     .ToListAsync();
 
+                    
+
                 if (!logs.Any())
                 {
-                    return Json(new List<object>()); // Return empty array if no results
+                    return Json(new List<object>());
                 }
 
                 return Json(logs);
@@ -729,14 +661,11 @@ namespace SignalTracker.Controllers
             public List<log_network> data { get; set; }
         }
 
-        // SignalTracker/Controllers/MapViewController.cs
-
         [HttpGet]
         [Route("GetProviders")]
         public JsonResult GetProviders()
         {
-            var providerNames = db.tbl_network_log
-                // Add this 'Where' clause to filter out bad data at the database level
+            var providerNames = db.tbl_network_log.AsNoTracking()
                 .Where(p => !string.IsNullOrEmpty(p.m_alpha_long))
                 .Select(p => p.m_alpha_long)
                 .Distinct()
@@ -753,15 +682,14 @@ namespace SignalTracker.Controllers
         [Route("GetTechnologies")]
         public JsonResult GetTechnologies()
         {
-            var technologyNames = db.tbl_network_log
-                // Also add a 'Where' clause here for robustness
+            var technologyNames = db.tbl_network_log.AsNoTracking()
                 .Where(t => !string.IsNullOrEmpty(t.network))
                 .Select(t => t.network)
                 .Distinct()
                 .ToList();
 
             var technologies = technologyNames
-                .Select((name, index) => new { id = name, name }) // Using name for both id and name as in original code
+                .Select((name, index) => new { id = name, name })
                 .ToList();
 
             return Json(technologies);
@@ -773,14 +701,12 @@ namespace SignalTracker.Controllers
         {
             try
             {
-                // Get distinct band values from network logs, excluding null/empty values
-                var bandNames = db.tbl_network_log
+                var bandNames = db.tbl_network_log.AsNoTracking()
                     .Where(b => !string.IsNullOrEmpty(b.band))
                     .Select(b => b.band)
                     .Distinct()
                     .ToList();
 
-                // Format the bands for the frontend
                 var bands = bandNames
                     .Select((name, index) => new { id = index + 1, name })
                     .ToList();
@@ -789,10 +715,7 @@ namespace SignalTracker.Controllers
             }
             catch (Exception ex)
             {
-                // Log the error for debugging
                 Console.WriteLine($"Error in GetBands: {ex.Message}");
-
-                // Return a proper error response
                 return new JsonResult(new
                 {
                     status = 0,
@@ -802,143 +725,97 @@ namespace SignalTracker.Controllers
                 { StatusCode = 500 };
             }
         }
+
         [HttpPost]
         [AllowAnonymous]
         public async Task<JsonResult> log_networkAsync([FromBody] NetworkLogPostModel model)
-
         {
-            /*using var reader = new StreamReader(Request.Body);
-            var body = await reader.ReadToEndAsync();
-            Console.WriteLine("Received JSON: " + body);*/
-            // Now try manually deserializing:
-            //var model = JsonSerializer.Deserialize<NetworkLogPostModel>(body); 
-
-            ReturnMessage message = new ReturnMessage();
+            var message = new ReturnMessage();
+            var ci = CultureInfo.InvariantCulture;
 
             try
             {
-                //cf.SessionCheck(); // Optional: session/token validation
-
-                if (model != null && model.data != null && model.data.Any())
-                {
-                    foreach (var item in model.data)
-                    {
-                        var log = new tbl_network_log
-                        {
-                            session_id = model.sessionid,
-                            timestamp = DateTime.TryParse(item.timestamp, out var ts) ? ts : (DateTime?)null,
-                            lat = float.TryParse(item.lat, out var latVal) ? latVal : (float?)null,
-                            lon = float.TryParse(item.lon, out var lonVal) ? lonVal : (float?)null,
-                            battery = int.TryParse(item.battery, out var batVal) ? batVal : (int?)null,
-                            dls = item.dls,
-                            uls = item.uls,
-                            call_state = item.call_state,
-                            hotspot = item.hotspot,
-                            apps = item.apps,
-                            num_cells = int.TryParse(item.num_cells, out var ncVal) ? ncVal : (int?)null,
-                            network = item.network,
-                            m_mcc = int.TryParse(item.m_mcc, out var mccVal) ? mccVal : (int?)null,
-                            m_mnc = int.TryParse(item.m_mnc, out var mncVal) ? mncVal : (int?)null,
-                            m_alpha_long = item.m_alpha_long,
-                            m_alpha_short = item.m_alpha_short,
-                            mci = item.mci,
-                            pci = item.pci,
-                            tac = item.tac,
-                            earfcn = item.earfcn,
-                            rssi = float.TryParse(item.rssi, out var rssiVal) ? rssiVal : (float?)null,
-                            rsrp = float.TryParse(item.rsrp, out var rsrpVal) ? rsrpVal : (float?)null,
-                            rsrq = float.TryParse(item.rsrq, out var rsrqVal) ? rsrqVal : (float?)null,
-                            sinr = float.TryParse(item.sinr, out var sinrVal) ? sinrVal : (float?)null,
-                            total_rx_kb = item.total_rx_kb,
-                            total_tx_kb = item.total_tx_kb,
-                            mos = float.TryParse(item.mos, out var mosVal) ? mosVal : (float?)null,
-                            jitter = float.TryParse(item.jitter, out var jitterVal) ? jitterVal : (float?)null,
-                            latency = float.TryParse(item.latency, out var latnVal) ? latnVal : (float?)null,
-                            packet_loss = float.TryParse(item.packet_loss, out var lossVal) ? lossVal : (float?)null,
-                            dl_tpt = item.dl_tpt,
-                            ul_tpt = item.ul_tpt,
-                            volte_call = item.volte_call,
-                            band = item.band,
-                            cqi = float.TryParse(item.cqi, out var cqiVal) ? cqiVal : (float?)null,
-                            bler = item.bler,
-                            primary_cell_info_1 = item.primary_cell_info_1,
-                            primary_cell_info_2 = item.primary_cell_info_2,
-                            all_neigbor_cell_info = item.all_neigbor_cell_info,
-                            image_path = item.image_path,
-
-                        };
-
-                        try
-                        {
-                            var lat = log.lat;
-                            var lon = log.lon;
-                            // Construct raw point as WKT (Well-Known Text)
-                            string pointWKT = $"POINT({lon} {lat})"; // Note: longitude comes first in WKT
-
-                            // Query polygon_id that contains the point
-                            /*var polygonId = db.Database.SqlQuery<int?>($@"
-                                SELECT id FROM map_region 
-                                WHERE ST_Contains(region, ST_GeomFromText('{pointWKT}'))
-                                LIMIT 1
-                            ").FirstOrDefault(); */
-
-                            //string pointWKT = $"POINT({item.lon} {item.lat})";
-
-                            //SHOW INDEX FROM map_regions;
-                            //ALTER TABLE defaultdb.map_regions DROP INDEX region;
-                            //ALTER TABLE defaultdb.map_regions MODIFY region geometry NOT NULL SRID 4326;
-                            //ALTER TABLE defaultdb.map_regions ADD SPATIAL INDEX(region);
-
-                            int srid = 4326; // Most GIS systems use WGS 84
-
-                            var polygonId = db.PolygonMatches
-                             .FromSqlRaw(@"
-                               SELECT id FROM map_regions 
-                               WHERE ST_Contains(region, ST_GeomFromText({0}, {1})) 
-                               LIMIT 1", pointWKT, srid)
-                             .Select(p => (int?)p.id)
-                             .FirstOrDefault();
-                            /*
-                         var polygonId = db.PolygonMatches
-                              .FromSqlRaw(
-                                  "SELECT id FROM map_regions WHERE ST_Contains(region, ST_SRID(ST_GeomFromText(@point), @srid)) LIMIT 1",
-                                  new MySql.Data.MySqlClient.MySqlParameter("@point", pointWKT),
-                                  new MySql.Data.MySqlClient.MySqlParameter("@srid", srid)
-                              )
-                              .Select(p => (int?)p.id)
-                              .FirstOrDefault();
-                          */
-                            /*
-                            var polygonId = db.PolygonMatches
-                                .FromSqlRaw(
-                                    @"SELECT id FROM map_regions 
-                                      WHERE ST_Contains(region, ST_SRID(ST_GeomFromText(@point), @srid)) 
-                                      LIMIT 1",
-                                    new MySqlParameter("@point", pointWKT),
-                                    new MySqlParameter("@srid", srid)
-                                )
-                                .Select(p => (int?)p.id)
-                                .FirstOrDefault();
-                            */
-                            log.polygon_id = polygonId;
-                        }
-                        catch (Exception ex)
-                        {
-
-                            var a = "Error: " + ex.Message;
-                        }
-                        db.tbl_network_log.Add(log);
-                    }
-
-                    db.SaveChanges();
-                    message.Status = 1;
-                    message.Message = "Data saved successfully.";
-                }
-                else
+                if (model?.data == null || !model.data.Any())
                 {
                     message.Status = 0;
                     message.Message = "No data received.";
+                    return Json(message);
                 }
+
+                var logsToInsert = new List<tbl_network_log>(model.data.Count);
+
+                foreach (var item in model.data)
+                {
+                    var log = new tbl_network_log
+                    {
+                        session_id = model.sessionid,
+                        timestamp = DateTime.TryParse(item.timestamp, ci, DateTimeStyles.RoundtripKind, out var ts) ? ts : (DateTime?)null,
+                        lat = float.TryParse(item.lat, NumberStyles.Float, ci, out var latVal) ? latVal : (float?)null,
+                        lon = float.TryParse(item.lon, NumberStyles.Float, ci, out var lonVal) ? lonVal : (float?)null,
+                        battery = int.TryParse(item.battery, out var batVal) ? batVal : (int?)null,
+                        dls = item.dls,
+                        uls = item.uls,
+                        call_state = item.call_state,
+                        hotspot = item.hotspot,
+                        apps = item.apps,
+                        num_cells = int.TryParse(item.num_cells, out var ncVal) ? ncVal : (int?)null,
+                        network = item.network,
+                        m_mcc = int.TryParse(item.m_mcc, out var mccVal) ? mccVal : (int?)null,
+                        m_mnc = int.TryParse(item.m_mnc, out var mncVal) ? mncVal : (int?)null,
+                        m_alpha_long = item.m_alpha_long,
+                        m_alpha_short = item.m_alpha_short,
+                        mci = item.mci,
+                        pci = item.pci,
+                        tac = item.tac,
+                        earfcn = item.earfcn,
+                        rssi = float.TryParse(item.rssi, NumberStyles.Float, ci, out var rssiVal) ? rssiVal : (float?)null,
+                        rsrp = float.TryParse(item.rsrp, NumberStyles.Float, ci, out var rsrpVal) ? rsrpVal : (float?)null,
+                        rsrq = float.TryParse(item.rsrq, NumberStyles.Float, ci, out var rsrqVal) ? rsrqVal : (float?)null,
+                        sinr = float.TryParse(item.sinr, NumberStyles.Float, ci, out var sinrVal) ? sinrVal : (float?)null,
+                        total_rx_kb = item.total_rx_kb,
+                        total_tx_kb = item.total_tx_kb,
+                        mos = float.TryParse(item.mos, NumberStyles.Float, ci, out var mosVal) ? mosVal : (float?)null,
+                        jitter = float.TryParse(item.jitter, NumberStyles.Float, ci, out var jitterVal) ? jitterVal : (float?)null,
+                        latency = float.TryParse(item.latency, NumberStyles.Float, ci, out var latnVal) ? latnVal : (float?)null,
+                        packet_loss = float.TryParse(item.packet_loss, NumberStyles.Float, ci, out var lossVal) ? lossVal : (float?)null,
+                        dl_tpt = item.dl_tpt,
+                        ul_tpt = item.ul_tpt,
+                        volte_call = item.volte_call,
+                        band = item.band,
+                        cqi = float.TryParse(item.cqi, NumberStyles.Float, ci, out var cqiVal) ? cqiVal : (float?)null,
+                        bler = item.bler,
+                        primary_cell_info_1 = item.primary_cell_info_1,
+                        primary_cell_info_2 = item.primary_cell_info_2,
+                        all_neigbor_cell_info = item.all_neigbor_cell_info,
+                        image_path = item.image_path,
+                    };
+
+                    // Spatial lookup only if coordinates are present
+                    if (log.lat.HasValue && log.lon.HasValue)
+                    {
+                        int srid = 4326;
+                        string pointWKT = FormattableString.Invariant($"POINT({log.lon.Value} {log.lat.Value})");
+
+                        var polygonId = await db.PolygonMatches
+                            .FromSqlInterpolated($@"
+                                SELECT id FROM map_regions 
+                                WHERE ST_Contains(region, ST_GeomFromText({pointWKT}, {srid})) 
+                                LIMIT 1")
+                            .AsNoTracking()
+                            .Select(p => (int?)p.id)
+                            .FirstOrDefaultAsync();
+
+                        log.polygon_id = polygonId;
+                    }
+
+                    logsToInsert.Add(log);
+                }
+
+                await db.tbl_network_log.AddRangeAsync(logsToInsert);
+                await db.SaveChangesAsync();
+
+                message.Status = 1;
+                message.Message = "Data saved successfully.";
             }
             catch (Exception ex)
             {
