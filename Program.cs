@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using SignalTracker.Models;
+using Microsoft.AspNetCore.Http.Features;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -81,6 +82,16 @@ if (!string.IsNullOrWhiteSpace(dpKeysPath))
 
 // If you need DI for CommonFunction
 builder.Services.AddScoped<CommonFunction>();
+
+builder.Services.Configure<FormOptions>(o =>
+{
+    o.MultipartBodyLengthLimit = 100_000_000; // 100 MB or higher
+});
+builder.WebHost.ConfigureKestrel(o =>
+{
+    o.Limits.MaxRequestBodySize = 100_000_000; // or null for unlimited
+});
+
 
 var app = builder.Build();
 

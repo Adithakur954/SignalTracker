@@ -22,17 +22,17 @@ namespace SignalTracker.Controllers
         /// <summary>
         /// Check if session is valid (API replacement for SettingIndex view).
         /// </summary>
-        [HttpGet("CheckSession")]
+        // [HttpGet("CheckSession")]
          
-        public IActionResult CheckSession()
-        {
-            if (!cf.SessionCheck())
-            {
-                return Unauthorized(new { Status = 0, Message = "Unauthorized" });
-            }
+        // public IActionResult CheckSession()
+        // {
+        //     if (!cf.SessionCheck())
+        //     {
+        //         return Unauthorized(new { Status = 0, Message = "Unauthorized" });
+        //     }
 
-            return Ok(new { Status = 1, Message = "Session valid" });
-        }
+        //     return Ok(new { Status = 1, Message = "Session valid" });
+        // }
 
         /// <summary>
         /// Get threshold settings for logged-in user (or default).
@@ -44,10 +44,10 @@ namespace SignalTracker.Controllers
 
             try
             {
-                if (!cf.SessionCheck())
-                {
-                    return Unauthorized(new { Status = 0, Message = "Unauthorized" });
-                }
+                // if (!cf.SessionCheck())
+                // {
+                //     return Unauthorized(new { Status = 0, Message = "Unauthorized" });
+                // }
 
                 var setting = db.thresholds.FirstOrDefault(x => x.user_id == cf.UserId)
                               ?? db.thresholds.FirstOrDefault(x => x.is_default == 1);
@@ -74,10 +74,10 @@ namespace SignalTracker.Controllers
 
             try
             {
-                if (model == null || !cf.SessionCheck())
-                {
-                    return BadRequest(new { Status = 0, Message = "Invalid Request" });
-                }
+                // if (model == null || !cf.SessionCheck())
+                // {
+                //     return BadRequest(new { Status = 0, Message = "Invalid Request" });
+                // }
 
                 var existing = db.thresholds.FirstOrDefault(x => x.user_id == cf.UserId);
 

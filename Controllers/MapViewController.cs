@@ -191,9 +191,9 @@ namespace SignalTracker.Controllers
 
                 existingSession.start_lat = float.TryParse(model.start_lat, NumberStyles.Float, ci, out var latVal) ? latVal : (float?)null;
                 existingSession.start_lon = float.TryParse(model.start_lon, NumberStyles.Float, ci, out var lonVal) ? lonVal : (float?)null;
-                existingSession.end_lat   = float.TryParse(model.end_lat,   NumberStyles.Float, ci, out var latVal1) ? latVal1 : (float?)null;
-                existingSession.end_lon   = float.TryParse(model.end_lon,   NumberStyles.Float, ci, out var lonVal1) ? lonVal1 : (float?)null; // fixed
-                existingSession.end_time  = DateTime.TryParse(model.end_time, ci, DateTimeStyles.RoundtripKind, out var ts) ? ts : (DateTime?)null;
+                existingSession.end_lat = float.TryParse(model.end_lat, NumberStyles.Float, ci, out var latVal1) ? latVal1 : (float?)null;
+                existingSession.end_lon = float.TryParse(model.end_lon, NumberStyles.Float, ci, out var lonVal1) ? lonVal1 : (float?)null; // fixed
+                existingSession.end_time = DateTime.TryParse(model.end_time, ci, DateTimeStyles.RoundtripKind, out var ts) ? ts : (DateTime?)null;
 
                 existingSession.start_address = model.start_address;
                 existingSession.end_address = model.end_address;
@@ -332,16 +332,25 @@ namespace SignalTracker.Controllers
         [HttpGet]
         [Route("GetPredictionLog")]
         public JsonResult GetPredictionLog(
-            int? projectId, string token, DateTime? fromDate, DateTime? toDate,
-            string providers, string technology, string metric,
-            bool isBestTechnology, string Band, string EARFCN, string State,
-            int pointsInsideBuilding = 0, bool loadFilters = false)
+            int? projectId = null,
+string? token = null,
+DateTime? fromDate = null,
+DateTime? toDate = null,
+string? providers = null,
+string? technology = null,
+string? metric = "RSRP",
+bool isBestTechnology = false,
+string? Band = null,
+string? EARFCN = null,
+string? State = null,
+int pointsInsideBuilding = 0,
+bool loadFilters = false)
         {
             var message = new ReturnAPIResponse();
 
             try
             {
-                cf.SessionCheck();
+                // cf.SessionCheck();
 
                 IQueryable<tbl_prediction_data> query = db.tbl_prediction_data.AsNoTracking();
 
@@ -416,7 +425,7 @@ namespace SignalTracker.Controllers
 
                 // Threshold/color settings for graph
                 GraphStruct CoveragePerfGraph = new GraphStruct();
-                var setting = db.thresholds.AsNoTracking().FirstOrDefault(x => x.user_id == cf.UserId) 
+                var setting = db.thresholds.AsNoTracking().FirstOrDefault(x => x.user_id == cf.UserId)
                               ?? db.thresholds.AsNoTracking().FirstOrDefault(x => x.is_default == 1);
 
                 List<SettingReangeColor>? settingObj = null;
@@ -525,6 +534,7 @@ namespace SignalTracker.Controllers
                 {
                     a.id,
                     a.project_name,
+                    a.ref_session_id,
                     a.from_date,
                     a.to_date,
                     a.provider,
@@ -636,7 +646,7 @@ namespace SignalTracker.Controllers
                     })
                     .ToListAsync();
 
-                    
+
 
                 if (!logs.Any())
                 {
@@ -724,6 +734,165 @@ namespace SignalTracker.Controllers
                 })
                 { StatusCode = 500 };
             }
+        }
+
+        //----------------------------------------------------------------------------------------------------------------------------------//
+
+        public class SavePolygonModel
+        {
+            public int? ProjectId { get; set; }   // optional – for linking immediately to a project
+            public string Name { get; set; } = string.Empty;
+            public string WKT { get; set; } = string.Empty;  // Well‑Known Text representation of the polygon
+        }
+        [HttpPost]
+        [Route("SavePolygon")]
+        public async Task<JsonResult> SavePolygon([FromBody] SavePolygonModel model)
+        {
+            var message = new ReturnAPIResponse();
+
+            try
+            {
+                if (model == null || string.IsNullOrWhiteSpace(model.WKT))
+                {
+                    message.Status = 0;
+                    message.Message = "Invalid polygon data.";
+                    return Json(message);
+                }
+
+                // allow saving polygon before project creation
+                string sql = @"
+            INSERT INTO map_regions (tbl_project_id, name, region, status)
+            VALUES (NULL, {0}, ST_GeomFromText({1}, 4326), 1)";
+
+                await db.Database.ExecuteSqlRawAsync(sql, model.Name, model.WKT);
+
+                message.Status = 1;
+                message.Message = "Polygon saved successfully.";
+            }
+            catch (Exception ex)
+            {
+                message.Status = 0;
+                message.Message = "Error saving polygon: " + ex.Message;
+            }
+
+            return Json(message);
+        }
+
+        [HttpGet]
+        [Route("GetAvailablePolygons")]
+        public JsonResult GetAvailablePolygons()
+        {
+            var result = db.map_regions.AsNoTracking()
+                .Where(r => r.tbl_project_id == null && r.status == 1)
+                .Select(r => new { r.id, r.name })
+                .ToList();
+
+            return Json(result);
+        }
+
+        //------------------------------------------------------------------------------------------------------------------------------//
+        public class CreateProjectModel
+        {
+            public string ProjectName { get; set; } = string.Empty;
+            public string? Provider { get; set; }
+            public string? Tech { get; set; }
+            public string? Band { get; set; }
+            public string? EarFcn { get; set; }
+            public string? Apps { get; set; }
+            public DateTime? FromDate { get; set; }
+            public DateTime? ToDate { get; set; }
+            public List<int>? PolygonIds { get; set; }  // selected polygons
+            public List<int>? SessionIds { get; set; } // add this yahah badlav huwa hai
+        }
+
+        [HttpPost]
+        [Route("CreateProjectWithPolygons")]
+        public async Task<JsonResult> CreateProjectWithPolygons([FromBody] CreateProjectModel model)
+        {
+            var message = new ReturnAPIResponse();
+
+            using var transaction = await db.Database.BeginTransactionAsync();
+            try
+            {
+                var newProj = new tbl_project
+                {
+                    project_name = model.ProjectName,
+                    provider = model.Provider,
+                    tech = model.Tech,
+                    band = model.Band,
+                    earfcn = model.EarFcn,
+                    apps = model.Apps,
+                    from_date = model.FromDate?.ToString("yyyy-MM-dd"),
+                    to_date = model.ToDate?.ToString("yyyy-MM-dd"),
+                    created_on = DateTime.UtcNow,
+                    status = 1,
+                    // store selected session ids as comma-separated string (field already used elsewhere)
+                    ref_session_id = (model.SessionIds != null && model.SessionIds.Any())
+                                        ? string.Join(",", model.SessionIds)
+                                        : null
+                };
+
+                db.tbl_project.Add(newProj);
+                await db.SaveChangesAsync();
+
+                if (model.PolygonIds != null && model.PolygonIds.Any())
+                {
+                    var polygons = await db.map_regions
+                        .Where(p => model.PolygonIds.Contains(p.id))
+                        .ToListAsync();
+
+                    foreach (var p in polygons)
+                    {
+                        p.tbl_project_id = newProj.id;
+                    }
+
+                    await db.SaveChangesAsync();
+                }
+
+                await transaction.CommitAsync();
+
+                message.Status = 1;
+                message.Message = "Project created successfully.";
+                message.Data = new { projectId = newProj.id };
+            }
+            catch (Exception ex)
+            {
+                await transaction.RollbackAsync();
+                message.Status = 0;
+                message.Message = "Error creating project: " + ex.Message;
+            }
+
+            return Json(message);
+        }
+
+        [HttpPost]
+        [Route("AssignPolygonToProject")]
+        public async Task<JsonResult> AssignPolygonToProject(int polygonId, int projectId)
+        {
+            var message = new ReturnAPIResponse();
+            try
+            {
+                var polygon = await db.map_regions.FindAsync(polygonId);
+                if (polygon == null)
+                {
+                    message.Status = 0;
+                    message.Message = "Polygon not found.";
+                    return Json(message);
+                }
+
+                polygon.tbl_project_id = projectId;
+                await db.SaveChangesAsync();
+
+                message.Status = 1;
+                message.Message = "Polygon linked to project.";
+            }
+            catch (Exception ex)
+            {
+                message.Status = 0;
+                message.Message = "Error: " + ex.Message;
+            }
+
+            return Json(message);
         }
 
         [HttpPost]

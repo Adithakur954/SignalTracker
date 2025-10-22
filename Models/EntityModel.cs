@@ -239,6 +239,7 @@ namespace SignalTracker.Models
     {
 
         public int id { get; set; }
+        
         public float? tbl_project_id { get; set; }
         public float? lat { get; set; }
         public float? lon { get; set; }

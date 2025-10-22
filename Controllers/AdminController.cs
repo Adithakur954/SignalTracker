@@ -131,9 +131,11 @@ namespace SignalTracker.Controllers
 
                 message.Status = 1;
 
+                var today = DateTime.Today;
+
                 // Top-level stats
                 int totalSessions = await db.tbl_session.AsNoTracking().CountAsync();
-                int totalOnlineSessions = await db.tbl_session.AsNoTracking().CountAsync(s => s.end_time == null);
+                int totalOnlineSessions = await db.tbl_session.AsNoTracking().CountAsync(s =>s.start_time !=null && s.end_time == null && s.start_time.Value.Date== today);
                 int totalSamples = await db.tbl_network_log.AsNoTracking().CountAsync();
                 int totalUsers = await CountDistinctUsersWithIndexHintIfAvailableAsync();
 
