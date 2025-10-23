@@ -42,12 +42,12 @@ namespace SignalTracker.Controllers
             db = context;
             cf = _cf;
         }
-        public bool Process(int ExcelId, string directoryPath,string originalFileName,string polygonFilePath, int fileType,int projectId,string Remarks, out string errorMsag)
-        {                 
+        public bool Process(int ExcelId, string directoryPath, string originalFileName, string polygonFilePath, int fileType, int projectId, string Remarks, out string errorMsag)
+        {
             bool ret = ProcessFile(fileType, ExcelId, directoryPath, originalFileName, polygonFilePath, projectId, Remarks, out errorMsag);
             return ret;
 
-        }        
+        }
         public bool ProcessFile(int fileType, int excelID, string directorypath, string originalFileName, string polygonFilePath, int projectId, string Remarks, out string errorMsag)
         {
             bool IsValidSheet = true;
@@ -61,14 +61,14 @@ namespace SignalTracker.Controllers
             {
                 if (System.IO.File.Exists(directorypath))
                 {
-                    var extractpath = Path.Combine(Directory.GetCurrentDirectory(), "UploadedExcels","Extract"+DateTime.Now.ToString("MMddyyyyHmmss"));
+                    var extractpath = Path.Combine(Directory.GetCurrentDirectory(), "UploadedExcels", "Extract" + DateTime.Now.ToString("MMddyyyyHmmss"));
 
                     List<string> files = new List<string>();
-                    List<string> polygonFiles = new List<string>(); 
+                    List<string> polygonFiles = new List<string>();
                     List<string> imageList = new List<string>();
 
                     bool isZipFile = IsValidZip(directorypath);
-                    
+
                     if (isZipFile)
                     {
                         (files, imageList) = ExtractZipAndSeparateFiles(directorypath, extractpath);
@@ -83,15 +83,15 @@ namespace SignalTracker.Controllers
                         var session = new tbl_session();
                         session.user_id = 1; //user who is uploading
                         session.type = "network";
-                        session.notes = string.IsNullOrEmpty(Remarks)? "file upload": Remarks;
+                        session.notes = string.IsNullOrEmpty(Remarks) ? "file upload" : Remarks;
                         session.uploaded_on = DateTime.Now;
                         session.tbl_upload_id = 1;
 
                         db.tbl_session.Add(session);
                         db.SaveChanges();
                         sessionId = session.id; //skg
-                    }   
-                    else if(fileType == 2)
+                    }
+                    else if (fileType == 2)
                     {
                         bool isPolygonZipFile = IsValidZip(polygonFilePath);
                         if (isPolygonZipFile)
@@ -105,22 +105,26 @@ namespace SignalTracker.Controllers
                         {
                             if (!string.IsNullOrEmpty(file))
                             {
-                                ProcessPredictionPloygonJson(file, excelID, projectId, ref rowInserted, ref rowUpdated, out errorList);
+                                bool polygonOk = ProcessPredictionPloygonJson(file, excelID, projectId, ref rowInserted, ref rowUpdated, out errorList);
+                                if (!polygonOk)
+                                {
+                                    IsValidSheet = false;
+                                }
                                 if (errorList.Count > 0)
                                     allErrorList.AddRange(errorList);
                             }
                         }
                     }
 
-                    
+
 
                     foreach (string file in files)
                     {
-                        
-                        if (fileType == 1) 
-                            IsValidSheet= ProcessNetLogWorkSheet(sessionId, file, imageList, excelID, ref rowInserted, ref rowUpdated, out errorList);
+
+                        if (fileType == 1)
+                            IsValidSheet = ProcessNetLogWorkSheet(sessionId, file, imageList, excelID, ref rowInserted, ref rowUpdated, out errorList);
                         else if (fileType == 2)
-                            IsValidSheet= ProcessCtrPredictionSheet(file, excelID, projectId, ref rowInserted, ref rowUpdated, out errorList);
+                            IsValidSheet = ProcessCtrPredictionSheet(file, excelID, projectId, ref rowInserted, ref rowUpdated, out errorList);
 
                         if (errorList.Count > 0)
                             allErrorList.AddRange(errorList);
@@ -128,14 +132,14 @@ namespace SignalTracker.Controllers
                     //Move images in another folder
                     if (IsValidSheet && imageList.Count > 0)
                     {
-                        var imgpath = Path.Combine(Directory.GetCurrentDirectory(), "UploadedExcels", "Images_"+ sessionId);
+                        var imgpath = Path.Combine(Directory.GetCurrentDirectory(), "UploadedExcels", "Images_" + sessionId);
                         if (!Directory.Exists(imgpath))
                             Directory.CreateDirectory(imgpath);
                         foreach (var imagePath in imageList)
                         {
                             string fileName = Path.GetFileName(imagePath);
                             string destPath = Path.Combine(imgpath, fileName);
-                           
+
                             if (System.IO.File.Exists(destPath))
                                 System.IO.File.Delete(destPath);
 
@@ -149,11 +153,11 @@ namespace SignalTracker.Controllers
                     catch { }
                 }
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 IsValidSheet = false;
                 errorMsag = "Exception " + ex.Message;
-            }            
+            }
             //if (errorList.Count > 0)
             //{
             //    errorMsag += string.Join(Environment.NewLine, errorList);
@@ -170,14 +174,14 @@ namespace SignalTracker.Controllers
                     errorMsag += string.Join(Environment.NewLine, uploadedSuccessSheetList);
                 }
             }
-            else if(fileType == 15 && uploadedSuccessSheetList.Count > 0)
+            else if (fileType == 15 && uploadedSuccessSheetList.Count > 0)
             {
                 errorMsag += Environment.NewLine;
                 errorMsag += "Uploaded Sheets: " + Environment.NewLine;
                 errorMsag += string.Join(Environment.NewLine, uploadedSuccessSheetList);
             }
 
-            return IsValidSheet;   
+            return IsValidSheet;
         }
         public bool IsValidJson(string filePath)
         {
@@ -195,7 +199,7 @@ namespace SignalTracker.Controllers
             }
         }
         public bool IsValidZip(string filePath)
-        {            
+        {
             try
             {
                 using (FileStream fs = new FileStream(filePath, FileMode.Open, FileAccess.Read))
@@ -257,10 +261,10 @@ namespace SignalTracker.Controllers
         }
 
         #region Calculate Sheet-> Network Log sheet
-        public bool ProcessNetLogWorkSheet(int sessionId , string filePath,List<string> imageList, int ExcelID, ref int rowInserted, ref int rowUpdated, out List<string> errorList)
+        public bool ProcessNetLogWorkSheet(int sessionId, string filePath, List<string> imageList, int ExcelID, ref int rowInserted, ref int rowUpdated, out List<string> errorList)
         {
             bool isColValValid = true;
-            int userId = 0;            
+            int userId = 0;
             errorList = new List<string>();
 
             //var excel_details = db.tbl_upload_history.FirstOrDefault(a => a.id == ExcelID);
@@ -291,7 +295,7 @@ namespace SignalTracker.Controllers
                 }
                 else
                 {
-                    errorList.Add(fileName+" invalid file:- '" + missingHeaders + "' columns are missing");
+                    errorList.Add(fileName + " invalid file:- '" + missingHeaders + "' columns are missing");
                     return false;
                 }
 
@@ -320,7 +324,7 @@ namespace SignalTracker.Controllers
                                 string? Timestamp = GetColStringVal(row.Timestamp, out isColValValid);
                                 if (!isColValValid)
                                 {
-                                    errorList.Add($"Row {rowIndex} ({Timestamp}): Invalid Timestamp in sheet "+ fileName);
+                                    errorList.Add($"Row {rowIndex} ({Timestamp}): Invalid Timestamp in sheet " + fileName);
                                     break;
                                 }
                                 if (isColValValid)
@@ -362,8 +366,8 @@ namespace SignalTracker.Controllers
                                     networkLog.pci = row.PCI;
                                     networkLog.earfcn = row.EARFCN;
                                     bool isValidFloat = false;
-                                    networkLog.rsrp = ValidParseFloat(row.RSRP,out isValidFloat);
-                                    if(!isValidFloat)
+                                    networkLog.rsrp = ValidParseFloat(row.RSRP, out isValidFloat);
+                                    if (!isValidFloat)
                                     {
                                         errorList.Add($"Row {rowIndex} ({row.RSRP}): Invalid value of RSRP in sheet " + fileName);
                                         continue;
@@ -434,7 +438,7 @@ namespace SignalTracker.Controllers
                                 }
                                 else
                                     break;
-                                
+
                             }
 
                             if (isColValValid)
@@ -533,8 +537,8 @@ namespace SignalTracker.Controllers
                             {
 
 
-                               
-                                var obj =  new tbl_prediction_data();
+
+                                var obj = new tbl_prediction_data();
                                 obj.tbl_project_id = projectId;
                                 obj.lat = ParseFloat(row.latitude);
                                 obj.lon = ParseFloat(row.longitude);
@@ -597,7 +601,7 @@ namespace SignalTracker.Controllers
 
             return isColValValid;
         }
-        public bool ProcessPredictionPloygonJson(string filePath,int ExcelID, int projectId, ref int rowInserted, ref int rowUpdated, out List<string> errorList)
+        public bool ProcessPredictionPloygonJson(string filePath, int ExcelID, int projectId, ref int rowInserted, ref int rowUpdated, out List<string> errorList)
         {
             bool isColValValid = true;
             errorList = new List<string>();
@@ -671,7 +675,7 @@ namespace SignalTracker.Controllers
                         }
                         catch (Exception ex)
                         {
-                            dbContextTransaction.Rollback();                            
+                            dbContextTransaction.Rollback();
 
                             errorList.Add($"General error: {(ex.InnerException != null ? ex.InnerException.Message : ex.Message)}");
                             return false;
@@ -683,7 +687,7 @@ namespace SignalTracker.Controllers
             {
                 errorList.Add("invalid file:- '" + System.IO.Path.GetFileName(filePath));
                 return false;
-            }           
+            }
 
             return isColValValid;
         }
@@ -696,9 +700,9 @@ namespace SignalTracker.Controllers
             var firstLine = System.IO.File.ReadLines(filePath).FirstOrDefault();
             if (firstLine != null)
             {
-               
+
                 var actualHeaders = firstLine.Split(',').Select(h => h.Trim()).ToArray();
-                
+
                 var missing = expectedHeaders.Where(expected => !actualHeaders.Contains(expected, StringComparer.OrdinalIgnoreCase)).ToList();
 
                 isValidTemplate = missing.Count == 0;
@@ -742,13 +746,13 @@ namespace SignalTracker.Controllers
             if (string.IsNullOrWhiteSpace(value))
             {
                 isValid = true;
-                return null;                
+                return null;
             }
 
             if (float.TryParse(value, out float result) && !float.IsNaN(result) && !float.IsInfinity(result))
             {
                 isValid = true;
-                if(result == 2147483647)
+                if (result == 2147483647)
                 {
                     isValid = false;
                     return null;
@@ -1010,7 +1014,7 @@ namespace SignalTracker.Controllers
 
             return mm;
         }
-        private T GetColValOld<T>(object val,out bool isValidVal)
+        private T GetColValOld<T>(object val, out bool isValidVal)
         {
             isValidVal = true;
             if (val.ToString() == "")
@@ -1018,17 +1022,17 @@ namespace SignalTracker.Controllers
                 isValidVal = true;
                 return default(T);
             }
-            if (val == null || val == DBNull.Value || val.ToString()=="")
+            if (val == null || val == DBNull.Value || val.ToString() == "")
             {
                 isValidVal = false;
                 return default(T);
-                
+
             }
             return (T)Convert.ChangeType(val, typeof(T));
         }
         private string? GetColStringVal(object val, out bool isValidVal)
         {
-            isValidVal = true;            
+            isValidVal = true;
             if (val == null || val == DBNull.Value || val.ToString() == "")
             {
                 isValidVal = false;
@@ -1036,7 +1040,7 @@ namespace SignalTracker.Controllers
             }
             if (val.ToString() == "NA")
             {
-                return null; 
+                return null;
             }
             return val.ToString();
         }
@@ -1076,12 +1080,12 @@ namespace SignalTracker.Controllers
                     string startYear = parts[0].Trim();
                     if (startYear.Length == 4)
                     {
-                        ret = startYear+"-"+ endYearSuffix;
+                        ret = startYear + "-" + endYearSuffix;
                     }
                 }
             }
             catch { }
-            return ret; 
+            return ret;
         }
         public string ExtractFinancialYear(string input)
         {
